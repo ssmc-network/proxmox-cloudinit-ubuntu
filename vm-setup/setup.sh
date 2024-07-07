@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# special thanks!: https://github.com/unchama/kube-cluster-on-proxmox 
+
 # ----- #
 
 TEMPLATE_VMID=9000
