@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+# ----- #
+
 TEMPLATE_VMID=9000
 VM_LIST=(
     # ---
@@ -12,38 +15,45 @@ VM_LIST=(
     # ---
     #vmid #vmname      #cpu #mem #vmip         #targetip    #targethost
     "1101 ubuntu-k8s01 4    4096 192.168.20.51 192.168.20.3 pve01"
-    "1102 ubuntu-k8s02 4    4096 192.168.20.52 192.168.20.3 pve01"
-    "1103 ubuntu-k8s03 4    4096 192.168.20.53 192.168.20.3 pve01"
+    # "1102 ubuntu-k8s02 4    4096 192.168.20.52 192.168.20.3 pve01"
+    # "1103 ubuntu-k8s03 4    4096 192.168.20.53 192.168.20.3 pve01"
 )
 
 # ---
 
-# download the image(ubuntu 24.04 LTS)
-wget https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+# Check if the template VM already exists
+if ! qm list | grep "${TEMPLATE_VMID}"; then
+    echo "Template VMID ${TEMPLATE_VMID} does not exist. Creating template."
 
-# create a new VM and attach Network Adaptor
-qm create $TEMPLATE_VMID --cores 2 --memory 4096 --net0 virtio,bridge=vmbr1
+    # download the image(ubuntu 24.04 LTS)
+    wget https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
 
-# import the downloaded disk to local-lvm storage
-qm importdisk $TEMPLATE_VMID noble-server-cloudimg-amd64.img local-lvm
+    # create a new VM and attach Network Adaptor
+    qm create $TEMPLATE_VMID --cores 2 --memory 4096 --net0 virtio,bridge=vmbr1
 
-# add 
-qm set $TEMPLATE_VMID --scsihw virtio-scsi-pci --scsi0 local-lvm:vm-$TEMPLATE_VMID-disk-0
+    # import the downloaded disk to local-lvm storage
+    qm importdisk $TEMPLATE_VMID noble-server-cloudimg-amd64.img local-lvm
 
-# add Cloud-Init CD-ROM drive
-qm set $TEMPLATE_VMID --ide2 local-lvm:cloudinit
+    # add 
+    qm set $TEMPLATE_VMID --scsihw virtio-scsi-pci --scsi0 local-lvm:vm-$TEMPLATE_VMID-disk-0
 
-# set the bootdisk parameter to scsi0
-qm set $TEMPLATE_VMID --boot c --bootdisk scsi0
+    # add Cloud-Init CD-ROM drive
+    qm set $TEMPLATE_VMID --ide2 local-lvm:cloudinit
 
-# set serial console
-qm set $TEMPLATE_VMID --serial0 socket --vga serial0
+    # set the bootdisk parameter to scsi0
+    qm set $TEMPLATE_VMID --boot c --bootdisk scsi0
 
-# migrate to template
-qm template $TEMPLATE_VMID
+    # set serial console
+    qm set $TEMPLATE_VMID --serial0 socket --vga serial0
 
-# cleanup
-rm noble-server-cloudimg-amd64.img
+    # migrate to template
+    qm template $TEMPLATE_VMID
+
+    # cleanup
+    rm noble-server-cloudimg-amd64.img
+else
+    echo "Template VMID ${TEMPLATE_VMID} already exists. Skipping template creation."
+fi
 
 # ---
 
@@ -116,6 +126,8 @@ EOF
     done
 done
 
+# ----- #
+
 for array in "${VM_LIST[@]}"
 do
     echo "${array}" | while read -r vmid vmname cpu mem vmsrvip vmsanip targetip targethost
@@ -126,4 +138,4 @@ do
     done
 done
 
-# # endregion
+# ----- #
