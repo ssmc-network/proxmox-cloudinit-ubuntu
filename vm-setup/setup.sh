@@ -98,10 +98,11 @@ runcmd:
   - su - cloudinit -c "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
   - su - cloudinit -c "curl -sS https://github.com/goegoe0212.keys >> ~/.ssh/authorized_keys"
   - su - cloudinit -c "chmod 600 ~/.ssh/authorized_keys"
-  - su - cloudinit -c "curl -s https://raw.githubusercontent.com/ssmc-network/proxmox-cloudinit-ubuntu/main/k8s-setup/setup.sh > ~/setup.sh"
-  - su - cloudinit -c "sudo bash ~/setup.sh
   # change default shell to bash
   - chsh -s $(which bash) cloudinit
+  # set kubernetes
+  - su - cloudinit -c "curl -s https://raw.githubusercontent.com/ssmc-network/proxmox-cloudinit-ubuntu/main/k8s-setup/setup.sh > ~/setup.sh"
+  - su - cloudinit -c "sudo bash ~/setup.sh
 EOF
 # ----- #
         # create snippet for cloud-init(network-config)
