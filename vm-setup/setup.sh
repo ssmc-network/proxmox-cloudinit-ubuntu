@@ -16,9 +16,9 @@ VM_LIST=(
     # targethost: VMの配置先となるProxmoxホストのホスト名
     # ---
     #vmid #vmname      #cpu #mem #vmip         #targetip    #targethost
-    "1001 ubuntu-k3s01 4    8192 192.168.20.41 192.168.20.3 pve01"
-    "1002 ubuntu-k3s02 4    8192 192.168.20.42 192.168.20.3 pve01"
-    "1003 ubuntu-k3s03 4    8192 192.168.20.43 192.168.20.3 pve01"
+    "1001 ubuntu-k8s01 4    8192 192.168.20.41 192.168.20.3 pve01"
+    "1002 ubuntu-k8s02 4    8192 192.168.20.42 192.168.20.3 pve01"
+    "1003 ubuntu-k8s03 4    8192 192.168.20.43 192.168.20.3 pve01"
 )
 
 # ---
@@ -98,6 +98,8 @@ runcmd:
   - su - cloudinit -c "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
   - su - cloudinit -c "curl -sS https://github.com/goegoe0212.keys >> ~/.ssh/authorized_keys"
   - su - cloudinit -c "chmod 600 ~/.ssh/authorized_keys"
+  - su - cloudinit -c "curl -s https://raw.githubusercontent.com/ssmc-network/proxmox-cloudinit-ubuntu/main/k8s-setup/setup.sh > ~/setup.sh"
+  - su - cloudinit -c "sudo bash ~/setup.sh
   # change default shell to bash
   - chsh -s $(which bash) cloudinit
 EOF
