@@ -102,7 +102,7 @@ runcmd:
   - chsh -s $(which bash) cloudinit
   # set kubernetes
   - su - cloudinit -c "curl -s https://raw.githubusercontent.com/ssmc-network/proxmox-cloudinit-ubuntu/main/k8s-setup/setup.sh > ~/setup.sh"
-  - su - cloudinit -c "sudo bash ~/setup.sh
+  - su - cloudinit -c "sudo bash ~/setup.sh"
 EOF
 # ----- #
         # create snippet for cloud-init(network-config)
