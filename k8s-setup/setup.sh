@@ -4,7 +4,7 @@ sudo ufw allow 6443/tcp
 # システムの準備
 sudo apt update
 sudo apt upgrade -y
-sudo apt install -y apt-transport-https ca-certificates curl software-properties-common gnupg2 iptables arptables ebtables
+sudo apt install -y apt-transport-https ca-certificates curl software-properties-common gpg gnupg2 iptables arptables ebtables
 
 # IPTables 設定
 sudo update-alternatives --set iptables /usr/sbin/iptables-legacy
@@ -51,15 +51,22 @@ fi
 sudo systemctl restart containerd
 sudo systemctl enable containerd
 
-sudo apt-get update
-# apt-transport-httpsはダミーパッケージの可能性があります。その場合、そのパッケージはスキップできます
-sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+# Modify kernel parameters for Kubernetes
+cat <<EOF | tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+vm.overcommit_memory = 1
+vm.panic_on_oom = 0
+kernel.panic = 10
+kernel.panic_on_oops = 1
+kernel.keys.root_maxkeys = 1000000
+kernel.keys.root_maxbytes = 25000000
+EOF
+sysctl --system
 
-# `/etc/apt/keyrings`フォルダーが存在しない場合は、curlコマンドの前に作成する必要があります。下記の備考を参照してください。
-# sudo mkdir -p -m 755 /etc/apt/keyrings
+
+# kubernetes のインストールと設定
 curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-# これにより、/etc/apt/sources.list.d/kubernetes.listにある既存の設定が上書きされます
 echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
 
 sudo apt-get update
