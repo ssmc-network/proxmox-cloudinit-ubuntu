@@ -5,14 +5,20 @@ ssh-keygen -R 192.168.20.42
 ssh-keygen -R 192.168.20.43
 ```
 
-# known_host登録削除
+# VM削除
 ```sh
 qm shutdown 1001
 qm shutdown 1002
 qm shutdown 1003
+qm shutdown 1004
+qm shutdown 1005
+qm shutdown 1006
 qm destroy 1001
 qm destroy 1002
 qm destroy 1003
+qm destroy 1004
+qm destroy 1005
+qm destroy 1006
 ```
 
 # VMを生やすスクリプト
