@@ -1,0 +1,48 @@
+# terraform.tfvars.example
+#
+# 使い方:
+#   cp terraform.tfvars.example terraform.tfvars
+#   （terraform.tfvars は .gitignore 済み）
+#
+# API トークンなどの認証情報はここに書かず、環境変数で渡すこと。
+#   export PROXMOX_VE_ENDPOINT="https://192.168.20.3:8006/"
+#   export PROXMOX_VE_API_TOKEN="terraform@pve!provider=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+#   export PROXMOX_VE_SSH_USERNAME="root"
+#   export PROXMOX_VE_SSH_AGENT="true"
+
+# --- Proxmox ---
+# proxmox_node_name = "pve01"
+# proxmox_insecure  = true
+
+# --- SSH 公開鍵の取得元 ---
+# github_keys_user = "goegoe0212"
+
+# --- Kubernetes のバージョン ---
+# バージョン追従の検証では、まずここだけを変えて destroy -> apply する。
+# k8s_minor_version = "1.30"
+
+# --- Ubuntu のイメージ ---
+# URL とチェックサムは必ずセットで更新すること。
+# チェックサムは同じディレクトリの SHA256SUMS から取得する。
+# ubuntu_image_url       = "https://cloud-images.ubuntu.com/releases/noble/release-20260814/ubuntu-24.04-server-cloudimg-amd64.img"
+# ubuntu_image_checksum  = "6e40c07ae715f744f84af0bec76415cc1987dd115b4b8de437818561f01a3733"
+# ubuntu_image_file_name = "ubuntu-24.04-server-cloudimg-amd64.img"
+
+# --- ノード定義 ---
+# 検証を速く回したいときは、ここを CP 1 + Worker 2 に減らすとよい。
+# 既定は CP 3 + Worker 3。
+#
+# nodes = {
+#   "k8s-cp-01" = { vm_id = 1101, cores = 2, memory = 8192, ip = "192.168.20.40", role = "control-plane" }
+#   "k8s-wk-01" = { vm_id = 1104, cores = 4, memory = 8192, ip = "192.168.20.43", role = "worker" }
+#   "k8s-wk-02" = { vm_id = 1105, cores = 4, memory = 8192, ip = "192.168.20.44", role = "worker" }
+# }
+
+# --- home-api (Docker ホスト) ---
+# k8s クラスタとは別用途の VM。既定では作成しない。
+#
+# 注意: この VM は既に稼働している。同じ VMID / IP のまま apply すると衝突する。
+# 有効化する前に terraform/home-api.tf の冒頭コメントを読み、作り直すか
+# terraform import で取り込むかを決めること。
+#
+# home_api = { vm_id = 110, cores = 2, memory = 8192, ip = "192.168.20.13" }

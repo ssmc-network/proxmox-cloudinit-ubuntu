@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#
+# home-api ノードのセットアップスクリプト（Docker の導入）。
+#
+# このファイルは Terraform の templatefile() で描画され、base64 に変換されて
+# cloud-init の write_files でノードに配置される。
+#
+# テンプレートの注意:
+#   ドル記号 + 波括弧 の並びは Terraform の補間として解釈される。
+#   シェル変数は波括弧を付けない $VAR の形で書くこと。
+
+set -euo pipefail
+
+ADMIN_USER="${admin_user}"
+
+log() {
+  echo "[docker-setup] $*"
+}
+
+# クラウドイメージでは起動直後に unattended-upgrades が apt のロックを
+# 掴んでいることがある。掴まれたまま apt-get を叩くと失敗するので待つ。
+wait_for_apt() {
+  local waited=0
+  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 ||
+    fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    if [ "$waited" -ge 300 ]; then
+      log "apt のロックが 300 秒解放されなかった。このまま続行する"
+      return 0
+    fi
+    log "apt のロック解放を待機中 ($waited 秒)"
+    sleep 5
+    waited=$((waited + 5))
+  done
+}
+
+log "開始"
+
+# --------------------------------------------------------------------------
+# Docker CE のリポジトリを追加する
+#
+# 旧 vm-setup-docker.sh はディストリビューションのコードネームを "noble" と
+# 直接書いていた。Ubuntu のリリースを上げたときに追従漏れを起こすので、
+# /etc/os-release から取得する。
+# --------------------------------------------------------------------------
+log "Docker のリポジトリを追加する"
+install -m 0755 -d /etc/apt/keyrings
+
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+
+ARCH="$(dpkg --print-architecture)"
+CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+
+echo "deb [arch=$ARCH signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $CODENAME stable" \
+  >/etc/apt/sources.list.d/docker.list
+
+# --------------------------------------------------------------------------
+# Docker の導入
+# --------------------------------------------------------------------------
+log "Docker を導入する"
+wait_for_apt
+apt-get update
+apt-get install -y \
+  docker-ce \
+  docker-ce-cli \
+  containerd.io \
+  docker-buildx-plugin \
+  docker-compose-plugin
+
+systemctl enable --now docker
+
+# 管理ユーザが sudo なしで docker を使えるようにする
+usermod -aG docker "$ADMIN_USER"
+
+# 準備完了の目印
+touch /var/lib/docker-node-prepared
+
+log "完了"

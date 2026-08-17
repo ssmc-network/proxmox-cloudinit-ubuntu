@@ -1,0 +1,41 @@
+#cloud-config
+#
+# home-api ノードの cloud-config。
+# Terraform の templatefile() で描画され、snippets としてアップロードされる。
+#
+# テンプレートの注意: ドル記号 + 波括弧 の並びは Terraform の補間になる。
+
+hostname: ${hostname}
+fqdn: ${hostname}
+manage_etc_hosts: true
+timezone: Asia/Tokyo
+
+package_update: true
+
+users:
+  - default
+  - name: ${admin_user}
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    # パスワードログインは無効。SSH 公開鍵でのみログインする。
+    lock_passwd: true
+    ssh_authorized_keys:
+${ssh_authorized_keys_yaml}
+
+packages:
+  # agent { enabled = true } にしている以上、これは必須。
+  - qemu-guest-agent
+  - ca-certificates
+  - curl
+  - gnupg
+
+write_files:
+  - path: /usr/local/sbin/docker-setup.sh
+    owner: "root:root"
+    permissions: "0755"
+    encoding: b64
+    content: ${docker_setup_script_b64}
+
+runcmd:
+  - [systemctl, enable, --now, qemu-guest-agent]
+  - [/usr/local/sbin/docker-setup.sh]
