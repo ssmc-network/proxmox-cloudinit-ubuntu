@@ -106,8 +106,11 @@ Proxmox 向けには `Telmate/proxmox` と `bpg/proxmox` がありますが、**
 terraform {
   required_providers {
     proxmox = {
-      source  = "bpg/proxmox"
-      version = "~> 0.x"   # 必ずバージョンを固定する
+      source = "bpg/proxmox"
+      # 0.x なのでマイナーで破壊的変更が入りうる。パッチのみ許可する形で固定する
+      # （"~> 0.111.1" は >= 0.111.1, < 0.112.0）。マイナーを上げるときは
+      # CHANGELOG を読んでから手で変更すること。
+      version = "~> 0.111.1"
     }
   }
 }
@@ -162,13 +165,14 @@ resource "proxmox_virtual_environment_download_file" "ubuntu" {
 }
 ```
 
-**現状のスクリプトは `cloud-images.ubuntu.com/noble/current/` を使っていますが、これは daily build です。**
+**`/<codename>/current/` は daily build なので使わないこと。**
 同じ URL でも日によって中身が変わるため、「同じコードから同じクラスタを作り直す」が成立しません。
-移行時に必ず直してください。
+旧スクリプトはここを踏んでいました。現在は `/releases/<codename>/release-<date>/` で
+日付まで固定し、`checksum` を付けてあります。
 
-- **`/<codename>/current/` ではなく `/releases/<codename>/release/` を使うこと**
-- **`checksum` を必ず付けてください。** イメージが差し替わったことに気づけます
-- **URL とバージョンは変数にしてください。** Ubuntu のリリースを上げるときに 1 箇所で済みます
+- **`checksum` を外さないこと。** イメージが差し替わったことに気づけなくなります
+- **URL とチェックサムは必ずセットで更新すること。** 片方だけ変えると apply が落ちます
+- URL・チェックサム・ファイル名はすべて変数化済み（`ubuntu_image_*`）
 - `import_from` の ID 書式は **`<datastore_id>:import/<file_name>`**。
   リソース参照でもリテラル文字列でも構いません
 - 圧縮イメージ（`.qcow2.xz` 等）は `import_from` では扱えません。その場合は
