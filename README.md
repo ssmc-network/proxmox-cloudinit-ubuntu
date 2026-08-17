@@ -13,10 +13,9 @@
 terraform/       Terraform 一式。VM の払い出しはここが担当する
 cloud-init/      cloud-config とノード準備スクリプトのテンプレート
 manifests/       クラスタに流し込む YAML (MetalLB, 動作確認用 nginx)
+legacy/          qm コマンドを直接叩く旧経路（後述。フォールバックとして残置）
+k8s-setup/       旧経路が VM 起動時に取得するノード準備スクリプト（後述）
 ```
-
-`qm` コマンドを直接叩いていた旧経路は削除済みです。
-VM の払い出しは Terraform に一本化されています。
 
 ## 前提条件
 
@@ -168,21 +167,47 @@ k8s クラスタとは別用途の Docker ホストです。
 home_api = { vm_id = 110, cores = 2, memory = 8192, ip = "192.168.20.13" }
 ```
 
-## 旧クラスタの後始末
+## 旧経路（`legacy/` と `k8s-setup/`）について
 
-旧経路で作った VM は Terraform の管理外なので、`terraform destroy` では消えません。
-Proxmox ホスト上で手で消してください。
+Terraform 移行前の、`qm` コマンドを直接叩くシェルスクリプトです。
+Proxmox ホスト上で実行します。
+
+**Terraform 経路の動作確認が済むまでのフォールバックとして残しています。**
+中身は移行前から変更していません（`vm-setup/` から `legacy/` へ移動しただけです）。
+
+```sh
+# 旧経路で k8s クラスタを作る場合（Proxmox ホスト上で実行）
+bash legacy/vm-setup-kubernetes.sh
+```
+
+注意点が 2 つあります。
+
+- **`k8s-setup/setup.sh` を移動・改名しないでください。**
+  `legacy/vm-setup-kubernetes.sh` の cloud-init が、VM の起動時に
+  このファイルを `raw.githubusercontent.com` 経由で `main` から取得します。
+  つまり **`main` にあるそのファイルは、次に VM を起動した瞬間に実行されます。**
+  `legacy/` 配下へ移すとファイルが残っていても URL が 404 になり、旧経路が壊れます
+- 旧経路のクラスタは VMID `1001`-`1006` / IP `192.168.20.30`-`.35`、
+  Terraform 経路は `1101`-`1106` / `192.168.20.40`-`.45` を使うので、**同居できます**
+
+ノード準備の内容を変えたいときは、`k8s-setup/setup.sh` ではなく
+**`cloud-init/k8s-setup.sh.tftpl` の方を直してください**（`k8s-setup/setup.sh` を
+触ると、旧経路で作り直したクラスタに即座に影響します）。
+
+### 旧クラスタの後始末
+
+Terraform 経路に完全に移った後、旧経路で作った VM を消す場合の手順です。
+これらは Terraform の管理外なので `terraform destroy` では消えません。
 
 ```sh
 for id in 1001 1002 1003 1004 1005 1006; do qm shutdown $id; done
 for id in 1001 1002 1003 1004 1005 1006; do qm destroy  $id; done
 
-# テンプレート VM も不要になります（Terraform はイメージを直接取り込むため）
+# テンプレート VM（Terraform はイメージを直接取り込むため不要）
 qm destroy 9000
 ```
 
 **Terraform 経路の動作確認が済むまでは消さないでください。**
-新旧は VMID / IP が重ならないので同居できます。
 
 ## 動作確認の状況
 

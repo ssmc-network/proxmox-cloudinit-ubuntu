@@ -40,10 +40,22 @@ cloud-init/
   home-api.yaml.tftpl    # home-api の cloud-config テンプレート
   docker-setup.sh.tftpl  # home-api の Docker 導入スクリプト
 manifests/               # クラスタに流し込む YAML (metallb, 動作確認用 nginx)
+legacy/                  # 旧経路。Proxmox ホスト上で実行する
+  vm-setup-docker.sh       # home-api (VMID 110) 用
+  vm-setup-kubernetes.sh   # k8s クラスタ (VMID 1001-1006) 用
+k8s-setup/
+  setup.sh               # 旧経路が VM 起動時に取得するスクリプト（後述・動かさないこと）
 ```
 
-**旧 `qm` シェルスクリプト経路（`vm-setup/` `k8s-setup/`）は削除済みです。**
-VM の払い出しは Terraform に一本化されています。
+**旧 `qm` シェルスクリプト経路は `legacy/` と `k8s-setup/` に残してあります。**
+Terraform 経路の動作確認が取れるまでのフォールバックです。**勝手に削除しないこと。**
+
+Terraform 経路と旧経路は VMID / IP が重ならないので同居できます。
+
+| | VMID | IP |
+|---|---|---|
+| Terraform 経路 | 1101 - 1106 | 192.168.20.40 - .45 |
+| 旧経路 | 1001 - 1006 | 192.168.20.30 - .35 |
 
 ### Terraform に移行して何が変わったか
 
@@ -55,20 +67,46 @@ VM の払い出しは Terraform に一本化されています。
   `"vmid vmname cpu mem ip ..."` というスペース区切り文字列 + `while read -r` は、
   カラムを 1 つ増やすだけで壊れました
 - **state があるので、何が存在するかをコードが把握できる。** 以前は `qm list` を grep していました
-- **cloud-init の中身が Terraform の管理下に入った。** 以前は VM の起動時に
+- **cloud-init の中身が Terraform の管理下に入った。** 旧経路は VM の起動時に
   `raw.githubusercontent.com` から `k8s-setup/setup.sh` を curl しており、
-  **`main` に push した瞬間に次に起動する全 VM の挙動が変わる**構造でした。
-  現在は `templatefile()` で描画して base64 で埋め込むため、
+  **`main` に push した瞬間に次に起動する全 VM の挙動が変わる**構造です。
+  Terraform 経路は `templatefile()` で描画して base64 で埋め込むため、
   スクリプトの変更が `plan` の差分に現れます。**この方式を崩さないこと**
 
-### 削除済みのファイル（記録・復活させないこと）
+### 旧経路との対応（どこに移植したか）
 
-- `vm-setup/vm-setup-docker.sh` → `terraform/home-api.tf` + `cloud-init/home-api.yaml.tftpl` に移植
-- `vm-setup/mv-setup-kubernetes.sh` → `terraform/vms.tf` + `cloud-init/k8s-node.yaml.tftpl` に移植
-- `k8s-setup/setup.sh` → `cloud-init/k8s-setup.sh.tftpl` に移植
+旧ファイルは削除せず残してあります。Terraform 側の対応先は次のとおりです。
+
+| 旧経路（残置） | Terraform 経路 |
+|---|---|
+| `legacy/vm-setup-docker.sh` | `terraform/home-api.tf` + `cloud-init/home-api.yaml.tftpl` |
+| `legacy/vm-setup-kubernetes.sh` | `terraform/vms.tf` + `cloud-init/k8s-node.yaml.tftpl` |
+| `k8s-setup/setup.sh` | `cloud-init/k8s-setup.sh.tftpl` |
 
 **旧経路のクラスタ（VMID 1001-1006）とテンプレート VM（9000）は Terraform の
 管理外なので、`terraform destroy` では消えません。** 手で消す手順は README にあります。
+
+### 旧ファイルを勝手に消さないこと（重要）
+
+**`legacy/` と `k8s-setup/` は残す方針です。** 整理・リファクタの一環で
+削除しないでください。移動が必要な場合も `git mv` にとどめ、履歴を残すこと。
+
+特に **`k8s-setup/setup.sh` はパスごと固定です。** `legacy/vm-setup-kubernetes.sh`
+の cloud-init が、VM の起動時にこの URL を叩いています。
+
+```
+https://raw.githubusercontent.com/ssmc-network/proxmox-cloudinit-ubuntu/main/k8s-setup/setup.sh
+```
+
+つまり **`main` にあるこのファイルは、次に VM を起動した瞬間に実行されます。**
+
+- **`legacy/` へ移動するのも不可。** ファイルが残っていても URL が 404 になり、
+  旧経路が動かなくなります。「残す」意味がなくなります
+- 中身を変更する場合も、**push した瞬間に次回起動分から挙動が変わる**ことを意識すること
+- ノード準備の内容を変えたいときは **`cloud-init/k8s-setup.sh.tftpl` 側だけを直す**
+
+`k8s-setup/setup.sh` と `cloud-init/k8s-setup.sh.tftpl` は内容が重複していますが、
+**移行期間中の意図的な重複です。**
 
 ## OS 選定の経緯（決定記録・蒸し返さないこと）
 
@@ -274,8 +312,8 @@ variable "nodes" {
 |---|---|---|---|
 | k8s CP 3 台 / Worker 3 台（現行） | 1101 - 1106 | 192.168.20.40 - .45 | あり |
 | home-api | 110 | 192.168.20.13 | 既定では作らない設定 |
-| k8s クラスタ（旧経路。残っていれば手で消す） | 1001 - 1006 | 192.168.20.30 - .35 | なし |
-| テンプレート VM（不要になった。残っていれば手で消す） | 9000 | - | なし |
+| k8s クラスタ（旧経路。動作確認が済むまで残す） | 1001 - 1006 | 192.168.20.30 - .35 | なし |
+| テンプレート VM（旧経路が使う。同上） | 9000 | - | なし |
 
 **旧経路の VM は Terraform の管理外なので `terraform destroy` では消えません。**
 新旧は VMID / IP が重ならないので、動作確認が済むまで同居させて構いません。
@@ -360,9 +398,10 @@ Claude の作業環境からは実行して確認できないので、次を守�
 
 1. ~~`terraform/` を実装する~~ — 完了
 2. ~~README を書き直す~~ — 完了
-3. ~~旧 `qm` 経路（`vm-setup/` `k8s-setup/`）を削除する~~ — 完了
+3. ~~`vm-setup/` を `legacy/` に整理する（`git mv`。中身は変更なし）~~ — 完了
 4. **`terraform apply` が通ることを確認する** ← いまここ。**ユーザに実行してもらうこと**
-5. 確認できたら、旧クラスタ（VMID 1001-1006）とテンプレート VM（9000）を手で消す
+5. 確認できたら、旧クラスタ（VMID 1001-1006）とテンプレート VM（9000）を手で消す。
+   **`legacy/` と `k8s-setup/` のファイル自体は残す**（削除の判断はユーザが行う）
 6. `goegoe0212/proxmox-rhel-kubernetes` をアーカイブする
 
 ### 4 で確認したいこと
@@ -379,7 +418,8 @@ Claude の作業環境からは実行して確認できないので、次を守�
 ## 決定済み事項
 
 - **OS**: Ubuntu 24.04 LTS（noble）継続。RHEL / Rocky / Alma への切り替え機構は作らない
-- **VM 払い出し**: Terraform（`bpg/proxmox`）。旧 `qm` シェルスクリプト経路は削除済み
+- **VM 払い出し**: Terraform（`bpg/proxmox`）へ移行。
+  旧 `qm` シェルスクリプト経路は `legacy/` `k8s-setup/` に残す（削除しない）
 - **ノード構成**: CP 3 + Worker 3 の計 6 ノード。VMID 1101-1106 / IP 192.168.20.40-.45
 - **`home-api`（VMID 110）**: Terraform に移植済み。ただし既存 VM が稼働しているため既定では作らない
 - **リポジトリ**: `goegoe0212/proxmox-rhel-kubernetes` は統合・廃止し、ここに一本化する
