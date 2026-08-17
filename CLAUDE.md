@@ -431,13 +431,25 @@ Claude の作業環境からは実行して確認できないので、次を守�
 2. **ノード内の構成管理**: cloud-init だけで完結させるか、Ansible を併用するか。
    ユーザは「まだ決めない」との判断。現状 `kubeadm init` / `join` は手動
 3. **Terraform か OpenTofu か**: コードはほぼ共通だが、CI やドキュメントの書き方が変わる
-4. **state の置き場**: 現状はローカル state（`.gitignore` 済み）。
+4. **state と実行の置き場**: 現状は **ローカル実行 + ローカル state**（`.gitignore` 済み）で、
+   `cloud` ブロックも `backend` ブロックも書いていません。
    state を失うと VM が孤児になる（VMID を固定してあるので
-   `terraform import` か `qm destroy` で復旧できる）。
-   MinIO 等の S3 互換バックエンドに移すかは未決
+   `terraform import` か `qm destroy` で復旧できる）ため、移行先は検討の価値があります。
+
+   **HCP Terraform（クラウド版）を使う場合、ワークスペースの Execution Mode を
+   必ず `Local` にしてください。** 既定の `Remote` は HashiCorp 側の実行環境で
+   Terraform が走るため、**プライベート LAN 上の Proxmox（`192.168.20.3`）にも、
+   snippets アップロードに使う SSH にも到達できません。**
+   `Local` にすると HCP 側は state の保管庫として働き、実行は手元で行われます。
+
+   - `Local` モードでは**ワークスペース変数が評価されない**ので、
+     `PROXMOX_VE_*` は手元の環境変数のままにします（現行の運用と変わりません）
+   - `Remote` のまま走らせたい場合は self-hosted agent が必要ですが、**有料機能**です
+   - 自宅内で完結させたいなら MinIO 等の S3 互換バックエンドが素直です
 5. **Kubernetes のターゲットバージョン**: 現状は v1.30 のまま。まず同じ版で通してから上げる想定
 6. **旧クラスタの VMID / IP の再利用**: 1001-1006 / .30-.35 を空けた後、再利用するか放置するか
 7. **正となるリモート**: `ssmc-network` と `goegoe0212` に同名リポジトリがあります。
-   コード上の依存は無くなった（`raw.githubusercontent.com` の参照を削除したため）ので
-   急ぎませんが、どちらを正とするかは決めた方がよいです
+   **`legacy/vm-setup-kubernetes.sh` が `ssmc-network` 側の raw URL を叩いているため、
+   旧経路を残す限りコード上の依存が残ります。** どちらを正とするか決めてください
+   （このクローンの origin は `ssmc-network`）
 8. **CNI**: 現状は flannel。踏襲するか
