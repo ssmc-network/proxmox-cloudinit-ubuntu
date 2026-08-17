@@ -13,9 +13,10 @@
 terraform/       Terraform 一式。VM の払い出しはここが担当する
 cloud-init/      cloud-config とノード準備スクリプトのテンプレート
 manifests/       クラスタに流し込む YAML (MetalLB, 動作確認用 nginx)
-legacy/          qm コマンドを直接叩く旧経路（後述。Terraform 検証後に削除する）
-k8s-setup/       旧経路が起動時に取得するノード準備スクリプト（後述）
 ```
+
+`qm` コマンドを直接叩いていた旧経路は削除済みです。
+VM の払い出しは Terraform に一本化されています。
 
 ## 前提条件
 
@@ -152,31 +153,49 @@ URL は `/releases/<codename>/release-<date>/` の形で日付まで固定して
 `/<codename>/current/` は daily build で日によって中身が変わるため、
 **使わないでください。**「同じコードから同じクラスタを作り直す」が成立しなくなります。
 
-## 旧経路（`legacy/`）について
+## home-api (VMID 110) について
 
-Terraform 移行前の、`qm` コマンドを直接叩くシェルスクリプトです。
-Proxmox ホスト上で実行します。
+k8s クラスタとは別用途の Docker ホストです。
+旧 `vm-setup-docker.sh` が担当していたものを Terraform に移植してあります。
 
-**Terraform 経路の動作確認が済むまでのフォールバックとして残しています。**
-確認が取れたら `legacy/` と `k8s-setup/` は削除してください。
+**既定では作成しません。** この VM は既に稼働しているため、同じ VMID / IP のまま
+`apply` すると衝突します。有効化するときは `terraform/home-api.tf` の
+冒頭コメントを読んで、作り直すか `terraform import` で取り込むかを決めてください。
 
-注意点が 2 つあります。
+有効にする場合は `terraform.tfvars` に次を書きます。
 
-- `legacy/vm-setup-kubernetes.sh` の cloud-init は、VM の起動時に
-  `k8s-setup/setup.sh` を `raw.githubusercontent.com` 経由で取得します。
-  つまり **`main` にあるそのファイルは、次に VM を起動した瞬間に実行されます。**
-  旧経路を残す間は `k8s-setup/setup.sh` を移動・改名しないでください
-- 旧経路のクラスタは VMID `1001`-`1006` / IP `192.168.20.30`-`.35` を使います。
-  Terraform 経路は `1101`-`1106` / `192.168.20.40`-`.45` なので、同居できます
+```hcl
+home_api = { vm_id = 110, cores = 2, memory = 8192, ip = "192.168.20.13" }
+```
+
+## 旧クラスタの後始末
+
+旧経路で作った VM は Terraform の管理外なので、`terraform destroy` では消えません。
+Proxmox ホスト上で手で消してください。
+
+```sh
+for id in 1001 1002 1003 1004 1005 1006; do qm shutdown $id; done
+for id in 1001 1002 1003 1004 1005 1006; do qm destroy  $id; done
+
+# テンプレート VM も不要になります（Terraform はイメージを直接取り込むため）
+qm destroy 9000
+```
+
+**Terraform 経路の動作確認が済むまでは消さないでください。**
+新旧は VMID / IP が重ならないので同居できます。
 
 ## 動作確認の状況
 
 Terraform のコードは **実 Proxmox がないと apply できないため、未実行です。**
 実施済みの静的チェックは次のとおりです。
 
-- `cloud-init/*.tftpl` を描画し、未定義の補間参照が無いことを確認
-- 描画後のノード準備スクリプトに対する `bash -n`
-- 描画後の cloud-config の YAML パース、および埋め込みスクリプトの base64 往復一致
+- `cloud-init/*.tftpl` 4 ファイルを描画し、未定義の補間参照が無いことを確認
+- 描画後のセットアップスクリプト 2 本に対する `bash -n`
+- 描画後の cloud-config 2 本の YAML パース、埋め込みスクリプトの base64 往復一致、
+  および `qemu-guest-agent` が `packages` に含まれること
+  （`agent { enabled = true }` と矛盾していないかの確認）
+- `terraform/*.tf` の括弧の対応、未定義変数の参照、未使用変数、
+  解決できないリソース参照が無いこと
 
 `terraform fmt` / `terraform validate` は実行環境に Terraform が無いため未実行です。
-初回の `terraform init` 後に流してください。
+**初回の `terraform init` の後に必ず流してください。**

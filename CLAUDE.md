@@ -21,8 +21,7 @@ Kubernetes のバージョンアップ追従を速く安全に回すために、
 
 ## 現状
 
-**Terraform 経路を実装済みですが、まだ実 Proxmox で apply していません。**
-旧 `qm` シェルスクリプト経路は `legacy/` にフォールバックとして残してあります。
+**Terraform への移行は完了していますが、まだ実 Proxmox で apply していません。**
 
 ```
 terraform/               # VM 払い出し。ここが現行の実装
@@ -34,72 +33,42 @@ terraform/               # VM 払い出し。ここが現行の実装
   vms.tf                 # VM 群
   outputs.tf             # 払い出された IP、apply 後の手順
   terraform.tfvars.example
+  home-api.tf            # home-api (VMID 110)。既定では作成しない
 cloud-init/
-  k8s-node.yaml.tftpl    # cloud-config テンプレート
-  k8s-setup.sh.tftpl     # ノード準備スクリプト（base64 で cloud-config に埋め込む）
+  k8s-node.yaml.tftpl    # k8s ノードの cloud-config テンプレート
+  k8s-setup.sh.tftpl     # k8s ノード準備スクリプト（base64 で cloud-config に埋め込む）
+  home-api.yaml.tftpl    # home-api の cloud-config テンプレート
+  docker-setup.sh.tftpl  # home-api の Docker 導入スクリプト
 manifests/               # クラスタに流し込む YAML (metallb, 動作確認用 nginx)
-legacy/                  # 旧経路。Proxmox ホスト上で実行する
-  vm-setup-docker.sh       # home-api (VMID 110) 用
-  vm-setup-kubernetes.sh   # k8s クラスタ (VMID 1001-1006) 用
-k8s-setup/
-  setup.sh               # 旧経路が起動時に取得するスクリプト（後述・動かさないこと）
 ```
 
-**Terraform 経路と旧経路は VMID / IP が重ならないので同居できます。**
+**旧 `qm` シェルスクリプト経路（`vm-setup/` `k8s-setup/`）は削除済みです。**
+VM の払い出しは Terraform に一本化されています。
 
-| | VMID | IP |
-|---|---|---|
-| Terraform 経路 | 1101 - 1106 | 192.168.20.40 - .45 |
-| 旧経路 | 1001 - 1006 | 192.168.20.30 - .35 |
+### Terraform に移行して何が変わったか
 
-### なぜ Terraform にするのか
-
-- **「壊す」が `terraform destroy` の 1 コマンドになる。** 現状は README に
-  `qm shutdown` / `qm destroy` を VMID の数だけ並べたメモがあり、手作業です
-- **テンプレート VM（VMID 9000）を手で作る工程が消える。** `disk` の `import_from` で
-  クラウドイメージを直接取り込めるため、`qm create` → `importdisk` → `qm template` が不要になります
-- **ノード定義が位置依存のパースから解放される。** 現状の
+- **「壊す」が `terraform destroy` の 1 コマンドになった。** 以前は
+  `qm shutdown` / `qm destroy` を VMID の数だけ手で並べていました
+- **テンプレート VM（VMID 9000）を手で作る工程が消えた。** `disk` の `import_from` で
+  クラウドイメージを直接取り込めるため、`qm create` → `importdisk` → `qm template` が不要です
+- **ノード定義が位置依存のパースから解放された。** 以前の
   `"vmid vmname cpu mem ip ..."` というスペース区切り文字列 + `while read -r` は、
-  カラムを 1 つ増やすだけで壊れます
-- **state があるので、何が存在するかをコードが把握できる。** 現状は `qm list` を grep しています
+  カラムを 1 つ増やすだけで壊れました
+- **state があるので、何が存在するかをコードが把握できる。** 以前は `qm list` を grep していました
+- **cloud-init の中身が Terraform の管理下に入った。** 以前は VM の起動時に
+  `raw.githubusercontent.com` から `k8s-setup/setup.sh` を curl しており、
+  **`main` に push した瞬間に次に起動する全 VM の挙動が変わる**構造でした。
+  現在は `templatefile()` で描画して base64 で埋め込むため、
+  スクリプトの変更が `plan` の差分に現れます。**この方式を崩さないこと**
 
-## 移行中に壊してはいけないもの（重要）
+### 削除済みのファイル（記録・復活させないこと）
 
-**このリポジトリの `main` は「動いているインフラ」です。** 移行作業では次に注意してください。
+- `vm-setup/vm-setup-docker.sh` → `terraform/home-api.tf` + `cloud-init/home-api.yaml.tftpl` に移植
+- `vm-setup/mv-setup-kubernetes.sh` → `terraform/vms.tf` + `cloud-init/k8s-node.yaml.tftpl` に移植
+- `k8s-setup/setup.sh` → `cloud-init/k8s-setup.sh.tftpl` に移植
 
-### 1. `k8s-setup/setup.sh` のパスを動かさないこと
-
-`legacy/vm-setup-kubernetes.sh` の cloud-init が、VM の起動時にこの URL を叩いています。
-
-```
-https://raw.githubusercontent.com/ssmc-network/proxmox-cloudinit-ubuntu/main/k8s-setup/setup.sh
-```
-
-つまり **`main` にあるこのファイルは、次に VM を起動した瞬間に実行されます。**
-
-- **このパスを移動・改名しないこと。** 旧経路でクラスタを作り直したときに壊れます
-- Terraform 経路の動作確認が取れて `legacy/` を削除するまでは触らない
-- 中身を変更する場合も、**push した瞬間に次回起動分から挙動が変わる**ことを意識すること
-
-この「push が即座に本番に効く」構造自体が問題なので、**Terraform 側は
-`cloud-init/k8s-setup.sh.tftpl` を `templatefile()` で描画し、base64 にして
-cloud-config の `write_files` に埋め込む方式**にしてあります。
-スクリプトの内容が Terraform の管理下に入り、`plan` の差分にも現れます。
-
-なお `k8s-setup/setup.sh` と `cloud-init/k8s-setup.sh.tftpl` は**内容が重複しています。**
-移行期間中の意図的な重複です。**旧経路を消すときに `k8s-setup/` ごと削除してください。**
-それまでの間、ノード準備の内容を変える場合は `cloud-init/` 側だけを直すこと
-（`k8s-setup/setup.sh` を触ると動いているクラスタの再構築に即座に影響します）。
-
-### 2. 対応済みの問題（記録）
-
-以前ここに挙げていた不具合は対応済みです。再発させないために残します。
-
-- **`README.md` の入口が存在しないファイル（`vm-setup/setup.sh`）を指していた** — 書き直し済み
-- **`vm-setup/` を `legacy/` に移動し、`mv-setup-kubernetes.sh` のタイポを
-  `vm-setup-kubernetes.sh` に修正済み。** `k8s-setup/setup.sh` は前述の理由で動かしていません
-- **README の URL が `goegoe0212/` を指し、`setup.sh` の参照先 `ssmc-network/` と食い違っていた** —
-  どちらを正とするかは未決のままです（このクローンの origin は `ssmc-network`）
+**旧経路のクラスタ（VMID 1001-1006）とテンプレート VM（9000）は Terraform の
+管理外なので、`terraform destroy` では消えません。** 手で消す手順は README にあります。
 
 ## OS 選定の経緯（決定記録・蒸し返さないこと）
 
@@ -162,9 +131,9 @@ provider "proxmox" {
   Datacenter > Storage で対象データストア（`local`）の内容種別に snippets を追加しておく必要があります。
   これは Terraform の外側の前提条件なので README に書いてください
 
-### 既存のシェル処理と Terraform リソースの対応
+### 旧シェル処理との対応（記録）
 
-| 現状のシェル処理 | Terraform での置き換え |
+| 削除した `qm` ベースの処理 | 置き換えた Terraform リソース |
 |---|---|
 | `wget` でクラウドイメージ取得 | `proxmox_virtual_environment_download_file` |
 | `qm create` + `importdisk` + `qm template` でテンプレート作成 | **不要**（`disk` の `import_from` で直接取り込む） |
@@ -289,21 +258,26 @@ variable "nodes" {
 - MetalLB の払い出しレンジ: `192.168.20.101` - `192.168.20.150`
 - Pod CIDR: `10.244.0.0/16`（flannel 前提）
 
-**現在割り当て済みの VMID / IP:**
+**VMID / IP の割り当て:**
 
-| 用途 | VMID | IP |
-|---|---|---|
-| テンプレート VM（Terraform 移行後は不要になる） | 9000 | - |
-| k8s CP 3 台 / Worker 3 台 | 1001 - 1006 | 192.168.20.30 - .35 |
-| home-api | 110 | 192.168.20.13 |
+| 用途 | VMID | IP | Terraform の管理下 |
+|---|---|---|---|
+| k8s CP 3 台 / Worker 3 台（現行） | 1101 - 1106 | 192.168.20.40 - .45 | あり |
+| home-api | 110 | 192.168.20.13 | 既定では作らない設定 |
+| k8s クラスタ（旧経路。残っていれば手で消す） | 1001 - 1006 | 192.168.20.30 - .35 | なし |
+| テンプレート VM（不要になった。残っていれば手で消す） | 9000 | - | なし |
 
-**移行中は新旧クラスタが同居する可能性があります。**
-Terraform 側で払い出すクラスタは、動作確認が済むまで
-**上記と重ならない VMID / IP 帯**を使ってください。同じ値を使うと既存クラスタを踏み潰します。
+**旧経路の VM は Terraform の管理外なので `terraform destroy` では消えません。**
+新旧は VMID / IP が重ならないので、動作確認が済むまで同居させて構いません。
+消す手順は README にあります。
+
+`home-api` は既に稼働している VM です。同じ VMID / IP のまま apply すると衝突するため、
+`var.home_api` は既定で `null`（作成しない）にしてあります。
+有効化する手順は `terraform/home-api.tf` の冒頭コメントを参照してください。
 
 ## ノード構成
 
-**Control Plane 3 台 + Worker 3 台 = 6 ノード**（現状を踏襲）。
+**Control Plane 3 台 + Worker 3 台 = 6 ノード。**
 
 - CP 3 台構成なので、`kubeadm init` した 1 台目に対して残り 2 台を
   `--control-plane` 付きで join させる手順が必要です
@@ -370,19 +344,18 @@ Claude の作業環境からは実行して確認できないので、次を守�
 - state を壊す操作（`terraform state rm`、`import`、`-target`）を提案するときは、
   何が起きるかを明記してユーザの判断を仰ぐ
 
-## 移行の進め方
+## いまの状況と、次にやること
 
-**旧経路を残したまま Terraform 経路を並行して作り、動作確認してから旧経路を消します。**
+**コードの整理は完了しています。残っているのは実機での確認です。**
 
-1. ~~`terraform/` を追加する~~ — 実装済み
-2. ~~README を書き直す~~ — 対応済み
-3. **`terraform apply` で、既存と重ならない VMID / IP にクラスタを払い出せることを確認する**
-   ← いまここ。**ユーザに実行してもらうこと**
-4. 確認できたら `legacy/` と `k8s-setup/` を削除する。
-   **この時点で初めて `k8s-setup/setup.sh` を消してよい**
-5. `goegoe0212/proxmox-rhel-kubernetes` をアーカイブする
+1. ~~`terraform/` を実装する~~ — 完了
+2. ~~README を書き直す~~ — 完了
+3. ~~旧 `qm` 経路（`vm-setup/` `k8s-setup/`）を削除する~~ — 完了
+4. **`terraform apply` が通ることを確認する** ← いまここ。**ユーザに実行してもらうこと**
+5. 確認できたら、旧クラスタ（VMID 1001-1006）とテンプレート VM（9000）を手で消す
+6. `goegoe0212/proxmox-rhel-kubernetes` をアーカイブする
 
-### 3 で確認したいこと
+### 4 で確認したいこと
 
 - `terraform init` / `plan` がプロバイダのバージョン制約で通るか
 - snippets のアップロードが通るか（データストアの内容種別と SSH の設定）
@@ -390,26 +363,31 @@ Claude の作業環境からは実行して確認できないので、次を守�
 - cloud-init が完走し、各ノードに `/var/lib/k8s-node-prepared` ができるか
 - `terraform destroy` が 1 コマンドで完了するか
 
+**まだ apply していないので、コードが動く保証はありません。**
+エラーが出た場合、真っ先に疑うのは上の 2 番目と 3 番目です。
+
 ## 決定済み事項
 
 - **OS**: Ubuntu 24.04 LTS（noble）継続。RHEL / Rocky / Alma への切り替え機構は作らない
-- **VM 払い出し**: `qm` シェルスクリプトから Terraform（`bpg/proxmox`）へ移行する
-- **ノード構成**: CP 3 + Worker 3 の計 6 ノード
+- **VM 払い出し**: Terraform（`bpg/proxmox`）。旧 `qm` シェルスクリプト経路は削除済み
+- **ノード構成**: CP 3 + Worker 3 の計 6 ノード。VMID 1101-1106 / IP 192.168.20.40-.45
+- **`home-api`（VMID 110）**: Terraform に移植済み。ただし既存 VM が稼働しているため既定では作らない
 - **リポジトリ**: `goegoe0212/proxmox-rhel-kubernetes` は統合・廃止し、ここに一本化する
 
 ## 未決事項（作業前にユーザに確認すること）
 
-1. **正となるリモートはどちらか**: `ssmc-network` と `goegoe0212` に同名リポジトリがあり、
-   `setup.sh` の参照先と README の URL が食い違っています
-2. **`home-api`（VMID 110）の扱い**: k8s クラスタとは別用途です。
-   Terraform 移行の対象に含めるか、別で管理するか
-3. **ノード内の構成管理**: cloud-init だけで完結させるか、Ansible を併用するか。
-   ユーザは「まだ決めない」との判断。まずは Terraform の VM 払い出しまでを作る
-4. **CP の VIP / ロードバランサ**: CP 3 台構成なので必須。kube-vip か HAProxy + keepalived か
-5. **Terraform か OpenTofu か**: コードはほぼ共通だが、CI やドキュメントの書き方が変わる
-6. **state の置き場**: ローカル state（`.gitignore`）で始めるか、
-   MinIO 等の S3 互換バックエンドを使うか。ローカルの場合、state を失うと VM が孤児になる
-   （VMID を固定しておけば `terraform import` か `qm destroy` で復旧できる）
-7. **Kubernetes のターゲットバージョン**: 現状は v1.30。移行と同時に上げるか、まず同じ版で通すか
-8. **移行後の VMID / IP**: 旧クラスタを消した後、1001-1006 / .30-.35 を再利用するか、別帯にするか
-9. **CNI**: 現状は flannel。踏襲するか
+1. **CP の VIP / ロードバランサ**: CP 3 台構成なので必須。kube-vip か HAProxy + keepalived か。
+   **決まるまでは tfvars で CP 1 + Worker 2 に減らして検証すること**
+2. **ノード内の構成管理**: cloud-init だけで完結させるか、Ansible を併用するか。
+   ユーザは「まだ決めない」との判断。現状 `kubeadm init` / `join` は手動
+3. **Terraform か OpenTofu か**: コードはほぼ共通だが、CI やドキュメントの書き方が変わる
+4. **state の置き場**: 現状はローカル state（`.gitignore` 済み）。
+   state を失うと VM が孤児になる（VMID を固定してあるので
+   `terraform import` か `qm destroy` で復旧できる）。
+   MinIO 等の S3 互換バックエンドに移すかは未決
+5. **Kubernetes のターゲットバージョン**: 現状は v1.30 のまま。まず同じ版で通してから上げる想定
+6. **旧クラスタの VMID / IP の再利用**: 1001-1006 / .30-.35 を空けた後、再利用するか放置するか
+7. **正となるリモート**: `ssmc-network` と `goegoe0212` に同名リポジトリがあります。
+   コード上の依存は無くなった（`raw.githubusercontent.com` の参照を削除したため）ので
+   急ぎませんが、どちらを正とするかは決めた方がよいです
+8. **CNI**: 現状は flannel。踏襲するか

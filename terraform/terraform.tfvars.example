@@ -37,3 +37,12 @@
 #   "k8s-wk-01" = { vm_id = 1104, cores = 4, memory = 8192, ip = "192.168.20.43", role = "worker" }
 #   "k8s-wk-02" = { vm_id = 1105, cores = 4, memory = 8192, ip = "192.168.20.44", role = "worker" }
 # }
+
+# --- home-api (Docker ホスト) ---
+# k8s クラスタとは別用途の VM。既定では作成しない。
+#
+# 注意: この VM は既に稼働している。同じ VMID / IP のまま apply すると衝突する。
+# 有効化する前に terraform/home-api.tf の冒頭コメントを読み、作り直すか
+# terraform import で取り込むかを決めること。
+#
+# home_api = { vm_id = 110, cores = 2, memory = 8192, ip = "192.168.20.13" }

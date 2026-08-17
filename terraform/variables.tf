@@ -159,6 +159,19 @@ variable "nodes" {
   }
 }
 
+# home-api は k8s クラスタとは別用途の Docker ホスト。
+# 既定では作成しない。詳細と有効化の手順は home-api.tf の冒頭コメントを参照。
+variable "home_api" {
+  type = object({
+    vm_id  = number
+    cores  = number
+    memory = number # MB
+    ip     = string
+  })
+  description = "home-api (Docker ホスト) の定義。null なら作成しない。既存 VM が稼働しているため既定は null"
+  default     = null
+}
+
 variable "cpu_type" {
   type        = string
   description = "エミュレートする CPU タイプ。host はホストの機能をそのまま渡すが、異なる CPU のノードへのライブマイグレーションができなくなる"
