@@ -225,16 +225,22 @@ cloud-init の user-data は `cloud-init/*.yaml.tftpl` を `templatefile()` で�
 - **`agent { enabled = true }` にしたのにゲストに qemu-guest-agent が入っていない**と、
   apply がタイムアウトするまで待たされます。cloud-init 側の `packages` に必ず含めること
 - **`disk` の `size` を後から縮小できません**。Proxmox の制約であり Terraform でも同じです
-- **ヒアドキュメント内の `$` エスケープ**: 現状のスクリプトは cloud-init を
-  ヒアドキュメントで生成しており、パスワードハッシュの `$5$...` を `\$5\$...` と
-  エスケープしています。Terraform の `templatefile()` に移すと
-  **エスケープの規則が変わります**（`${}` が Terraform の補間になる）。移行時の事故ポイントです
+- **`.tftpl` の中の `$` の扱い**: `templatefile()` ではドル記号 + 波括弧が
+  Terraform の補間になります。**シェル変数を波括弧付きで書くと壊れます。**
+  `cloud-init/*.sh.tftpl` は波括弧を付けない `$VAR` の形で統一してあるので、
+  この方針を崩さないこと。波括弧が必要な場合は `$` を 2 つ重ねてエスケープします。
+  **コメント内に書くときも同様に解釈される**ので、説明文でこの記法に触れるときは
+  記号をそのまま書かず、文章で表現してください（テンプレート内にその例があります）
+- **cloud-config の YAML はインデントに弱い**: 複数行を差し込むときは、
+  テンプレート側で `for` ディレクティブを使うより、Terraform 側で整形済みの
+  文字列を作って渡す方が安全です（`ssh_authorized_keys_yaml` がその形）。
+  スクリプトの埋め込みは base64 (`encoding: b64`) にして、
+  インデントとエスケープの問題を回避しています
 
 ## ノード定義の書き方
 
-現状はスペース区切りの文字列配列（`"vmid vmname cpu mem ip ..."`）ですが、
-Terraform では **`map(object({...}))` の変数 1 つ**にまとめ、`for_each` で回してください。
-位置依存のパース（`while read -r`）はもう不要です。
+ノードは **`map(object({...}))` の変数 1 つ**にまとめ、`for_each` で回します。
+旧経路のスペース区切り文字列 + `while read -r` による位置依存のパースは廃止済みです。
 
 ```hcl
 variable "nodes" {
