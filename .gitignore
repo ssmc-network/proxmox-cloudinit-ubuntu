@@ -1,0 +1,23 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl.bak
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+tfplan
+*.tfplan
+
+# 変数ファイルには接続先やトークンが入りうるのでコミットしない。
+# example だけは追跡する。
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# .terraform.lock.hcl は意図的にコミットする（プロバイダのバージョン固定のため）

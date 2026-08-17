@@ -19,22 +19,38 @@ Kubernetes のバージョンアップ追従を速く安全に回すために、
   Ubuntu のリリース更新も、変数 1 つの変更で済む状態を保つ
 - **同じコードから同じクラスタが再現できること**: 「使い捨て」は再現性とセットで意味を持つ
 
-## 現状と、これからやること
+## 現状
 
-このリポジトリには **`qm` コマンドを直接叩くシェルスクリプト**による実装があり、実際に動いています。
+**Terraform 経路を実装済みですが、まだ実 Proxmox で apply していません。**
+旧 `qm` シェルスクリプト経路は `legacy/` にフォールバックとして残してあります。
 
 ```
-README.md            # 手動オペレーションのメモ（VM 削除、kubeadm init など）
-vm-setup/            # Proxmox ホスト上で実行し、テンプレート作成 + VM を生やす
+terraform/               # VM 払い出し。ここが現行の実装
+  versions.tf            # required_providers とバージョン固定
+  providers.tf           # provider 設定（認証値は環境変数から）
+  variables.tf           # ノード定義、k8s / Ubuntu バージョン、ネットワーク値
+  images.tf              # download_file
+  cloud-init.tf          # SSH 公開鍵の取得と snippets 生成
+  vms.tf                 # VM 群
+  outputs.tf             # 払い出された IP、apply 後の手順
+  terraform.tfvars.example
+cloud-init/
+  k8s-node.yaml.tftpl    # cloud-config テンプレート
+  k8s-setup.sh.tftpl     # ノード準備スクリプト（base64 で cloud-config に埋め込む）
+manifests/               # クラスタに流し込む YAML (metallb, 動作確認用 nginx)
+legacy/                  # 旧経路。Proxmox ホスト上で実行する
   vm-setup-docker.sh       # home-api (VMID 110) 用
-  mv-setup-kubernetes.sh   # k8s クラスタ (VMID 1001-1006) 用
+  vm-setup-kubernetes.sh   # k8s クラスタ (VMID 1001-1006) 用
 k8s-setup/
-  setup.sh           # 各 VM の中で cloud-init から呼ばれ、k8s のノード準備をする
-manifests/           # クラスタに流し込む YAML (metallb, 動作確認用 nginx)
+  setup.sh               # 旧経路が起動時に取得するスクリプト（後述・動かさないこと）
 ```
 
-**これから、この VM 払い出し部分を Terraform に置き換えます。**
-`qm` を手続き的に叩く方式から、宣言的なリソース定義に移行します。
+**Terraform 経路と旧経路は VMID / IP が重ならないので同居できます。**
+
+| | VMID | IP |
+|---|---|---|
+| Terraform 経路 | 1101 - 1106 | 192.168.20.40 - .45 |
+| 旧経路 | 1001 - 1006 | 192.168.20.30 - .35 |
 
 ### なぜ Terraform にするのか
 
@@ -53,7 +69,7 @@ manifests/           # クラスタに流し込む YAML (metallb, 動作確認�
 
 ### 1. `k8s-setup/setup.sh` のパスを動かさないこと
 
-`vm-setup/mv-setup-kubernetes.sh` の cloud-init が、VM の起動時にこの URL を叩いています。
+`legacy/vm-setup-kubernetes.sh` の cloud-init が、VM の起動時にこの URL を叩いています。
 
 ```
 https://raw.githubusercontent.com/ssmc-network/proxmox-cloudinit-ubuntu/main/k8s-setup/setup.sh
@@ -61,23 +77,29 @@ https://raw.githubusercontent.com/ssmc-network/proxmox-cloudinit-ubuntu/main/k8s
 
 つまり **`main` にあるこのファイルは、次に VM を起動した瞬間に実行されます。**
 
-- **リファクタでこのパスを移動・改名しないこと。** 旧 bash 経路でクラスタを作り直したときに壊れます
-- Terraform 経路が動作確認できて、旧 `vm-setup/*.sh` を削除するまでは触らない
+- **このパスを移動・改名しないこと。** 旧経路でクラスタを作り直したときに壊れます
+- Terraform 経路の動作確認が取れて `legacy/` を削除するまでは触らない
 - 中身を変更する場合も、**push した瞬間に次回起動分から挙動が変わる**ことを意識すること
 
-この「push が即座に本番に効く」構造自体が問題なので、
-**Terraform 側では `templatefile()` でスクリプトを cloud-init に埋め込んでください。**
-そうすればスクリプトの内容が Terraform の管理下に入り、`plan` の差分にも現れます。
+この「push が即座に本番に効く」構造自体が問題なので、**Terraform 側は
+`cloud-init/k8s-setup.sh.tftpl` を `templatefile()` で描画し、base64 にして
+cloud-config の `write_files` に埋め込む方式**にしてあります。
+スクリプトの内容が Terraform の管理下に入り、`plan` の差分にも現れます。
 
-### 2. 既知の壊れている箇所（直してよい）
+なお `k8s-setup/setup.sh` と `cloud-init/k8s-setup.sh.tftpl` は**内容が重複しています。**
+移行期間中の意図的な重複です。**旧経路を消すときに `k8s-setup/` ごと削除してください。**
+それまでの間、ノード準備の内容を変える場合は `cloud-init/` 側だけを直すこと
+（`k8s-setup/setup.sh` を触ると動いているクラスタの再構築に即座に影響します）。
 
-- **`README.md` の入口が存在しないファイルを指しています。**
-  `vm-setup/setup.sh` を叩けと書かれていますが、このファイルは
-  `vm-setup-docker.sh` / `mv-setup-kubernetes.sh` に分割済みです
-- **README の URL は `goegoe0212/` 側を指しており、`setup.sh` の参照先 `ssmc-network/` と食い違っています。**
-  どちらを正とするか未決です（このクローンの origin は `ssmc-network`）
-- **`mv-setup-kubernetes.sh` はおそらく `vm-` のタイポです。**
-  ただし**改名は旧経路を捨てるときに行うこと**（README とセットで直す）
+### 2. 対応済みの問題（記録）
+
+以前ここに挙げていた不具合は対応済みです。再発させないために残します。
+
+- **`README.md` の入口が存在しないファイル（`vm-setup/setup.sh`）を指していた** — 書き直し済み
+- **`vm-setup/` を `legacy/` に移動し、`mv-setup-kubernetes.sh` のタイポを
+  `vm-setup-kubernetes.sh` に修正済み。** `k8s-setup/setup.sh` は前述の理由で動かしていません
+- **README の URL が `goegoe0212/` を指し、`setup.sh` の参照先 `ssmc-network/` と食い違っていた** —
+  どちらを正とするかは未決のままです（このクローンの origin は `ssmc-network`）
 
 ## OS 選定の経緯（決定記録・蒸し返さないこと）
 
@@ -235,37 +257,6 @@ cloud-init の user-data は `cloud-init/*.yaml.tftpl` を `templatefile()` で�
   エスケープしています。Terraform の `templatefile()` に移すと
   **エスケープの規則が変わります**（`${}` が Terraform の補間になる）。移行時の事故ポイントです
 
-## 移行後のディレクトリ構成（想定）
-
-```
-terraform/
-  versions.tf            # required_providers とバージョン固定
-  providers.tf           # provider 設定（値は変数・環境変数から）
-  variables.tf           # ノード定義、k8s バージョン、Ubuntu バージョン、ネットワーク値
-  images.tf              # download_file
-  cloud-init.tf          # file (snippets)
-  vms.tf                 # VM 群
-  outputs.tf             # 払い出された IP、kubeadm join に要る情報
-  terraform.tfvars.example
-cloud-init/
-  *.yaml.tftpl           # cloud-config テンプレート
-  k8s-setup.sh.tftpl     # ノード準備スクリプト（cloud-init に埋め込む）
-manifests/               # 既存のものを流用
-README.md                # 前提条件と実行手順
-.gitignore
-```
-
-`.gitignore` には最低限これを入れてください。
-
-```
-.terraform/
-*.tfstate
-*.tfstate.*
-*.tfvars
-!*.tfvars.example
-crash.log
-```
-
 ## ノード定義の書き方
 
 現状はスペース区切りの文字列配列（`"vmid vmname cpu mem ip ..."`）ですが、
@@ -321,28 +312,37 @@ Terraform 側で払い出すクラスタは、動作確認が済むまで
 - ノード数は `map(object)` 変数で定義するので、検証を速く回したいときは
   tfvars で CP 1 + Worker 2 に減らせる形にしておいてください
 
-## Kubernetes ノードのセットアップで注意する点
+## Kubernetes ノードのセットアップ
 
-既存の `k8s-setup/setup.sh` がほぼそのまま使えますが、移行時に次は見直してください。
+`cloud-init/k8s-setup.sh.tftpl` が担当します。旧 `k8s-setup/setup.sh` からの
+変更点と、その理由は次のとおりです。**元に戻す前にここを読んでください。**
 
-- **`update-alternatives --set iptables iptables-legacy` は外してよいはずです。**
+- **`update-alternatives --set iptables iptables-legacy` を外しました。**
   古い k8s 向けの対処で、現在の containerd + kube-proxy では通常不要です。
-  まず外した状態で組んで、問題が出たら戻す
+  問題が出たら戻す（スクリプト内にコメントを残してあります）
+- **sysctl を 1 ファイルに集約しました。** 旧スクリプトは
+  `/etc/sysctl.d/k8s.conf` を 2 回書いており、後の定義が前を黙って上書きしていました
+- **`ufw allow 6443/tcp` を外しました。** クラウドイメージでは ufw は通常 inactive で、
+  有効化されていない環境では意味がないためです。有効化する運用に変える場合は戻すこと
+- **k8s のリポジトリ URL のマイナーバージョンを変数化しました**
+  （`k8s_minor_version`）。バージョン追従で必ず触る箇所です
+- **apt のロック待ちを追加しました。** クラウドイメージでは起動直後に
+  unattended-upgrades がロックを掴んでいることがあり、`apt-get` が失敗します
+
+引き続き注意が必要な点:
+
 - **cgroup ドライバは `systemd` に揃える。** containerd の
   `/etc/containerd/config.toml` で `SystemdCgroup = true`、kubelet 側も `systemd`。
-  ここがずれるとノードが Ready にならない典型的な事故です。自動検出に頼らず明示すること
+  ここがずれるとノードが Ready にならない典型的な事故です
 - **containerd の設定ファイルの形式はバージョンで変わります。**
-  `config.toml` の version 2 / 3 で構造が違うため、現状の `sed` による書き換えが
-  そのまま効くとは限りません。k8s のバージョンを上げたときに真っ先に疑う箇所です
-- **`ufw allow 6443/tcp`**: クラウドイメージでは ufw は通常 inactive です。
-  有効化されていない環境では意味がないので、実際の状態を確認してから入れる
-- **sysctl の定義が重複しています。** 現状の `setup.sh` は
-  `/etc/sysctl.d/k8s.conf` を 2 回書いており、後の方が前を上書きしています。整理してください
-- **k8s のリポジトリ URL にはマイナーバージョンが含まれます**
-  （`https://pkgs.k8s.io/core:/stable:/v1.XX/deb/`）。
-  **ここを変数化してください。** バージョン追従で必ず触る箇所です
+  `config.toml` の version 2 / 3 で構造が違うため、`sed` による書き換えが
+  そのまま効くとは限りません。k8s のバージョンを上げたときに真っ先に疑う箇所です。
+  スクリプトには書き換え結果を検証する `grep` を入れて、
+  効かなかった場合に警告が出るようにしてあります
 - **`apt-mark hold kubelet kubeadm kubectl`**: 意図しない自動更新でクラスタが壊れるのを防ぐ。
   バージョンを上げるときは明示的に `unhold` する
+- **`kubeadm init` / `join` はスクリプトに含めていません。** ノード内の構成管理を
+  cloud-init だけで完結させるか Ansible を併用するかが未決のためです（未決事項を参照）
 
 ## コーディング規約
 
@@ -374,12 +374,21 @@ Claude の作業環境からは実行して確認できないので、次を守�
 
 **旧経路を残したまま Terraform 経路を並行して作り、動作確認してから旧経路を消します。**
 
-1. `terraform/` を追加する。**既存の `vm-setup/` `k8s-setup/` は触らない**
-2. 既存と重ならない VMID / IP でクラスタを払い出せることを確認する
-3. 確認できたら旧 `vm-setup/*.sh` を削除し、`k8s-setup/setup.sh` を
-   `templatefile()` に取り込む。**この時点で初めて `setup.sh` のパスを動かしてよい**
-4. README を書き直す（現状の入口は既に壊れている。前述）
+1. ~~`terraform/` を追加する~~ — 実装済み
+2. ~~README を書き直す~~ — 対応済み
+3. **`terraform apply` で、既存と重ならない VMID / IP にクラスタを払い出せることを確認する**
+   ← いまここ。**ユーザに実行してもらうこと**
+4. 確認できたら `legacy/` と `k8s-setup/` を削除する。
+   **この時点で初めて `k8s-setup/setup.sh` を消してよい**
 5. `goegoe0212/proxmox-rhel-kubernetes` をアーカイブする
+
+### 3 で確認したいこと
+
+- `terraform init` / `plan` がプロバイダのバージョン制約で通るか
+- snippets のアップロードが通るか（データストアの内容種別と SSH の設定）
+- `import_from` でクラウドイメージが取り込めるか（テンプレート VM を使わない経路）
+- cloud-init が完走し、各ノードに `/var/lib/k8s-node-prepared` ができるか
+- `terraform destroy` が 1 コマンドで完了するか
 
 ## 決定済み事項
 

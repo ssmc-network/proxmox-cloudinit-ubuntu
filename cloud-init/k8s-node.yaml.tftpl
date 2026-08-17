@@ -1,0 +1,47 @@
+#cloud-config
+#
+# Kubernetes ノードの cloud-config。
+# Terraform の templatefile() で描画され、snippets としてアップロードされる。
+#
+# テンプレートの注意: ドル記号 + 波括弧 の並びは Terraform の補間になる。
+
+hostname: ${hostname}
+fqdn: ${hostname}
+manage_etc_hosts: true
+timezone: Asia/Tokyo
+
+# パッケージ一覧の更新のみ行う。全体のアップグレードはノード準備の
+# 所要時間が読めなくなるので行わない（必要なら別途実施する）。
+package_update: true
+
+users:
+  - default
+  - name: ${admin_user}
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    # パスワードログインは無効。SSH 公開鍵でのみログインする。
+    lock_passwd: true
+    ssh_authorized_keys:
+${ssh_authorized_keys_yaml}
+
+packages:
+  # agent { enabled = true } にしている以上、これは必須。
+  # 入っていないと terraform apply がタイムアウトまで待たされる。
+  - qemu-guest-agent
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+
+write_files:
+  # ノード準備スクリプト。Terraform 側で描画したものを base64 で埋め込む。
+  # YAML のインデントやエスケープの影響を受けないようにするため。
+  - path: /usr/local/sbin/k8s-node-setup.sh
+    owner: "root:root"
+    permissions: "0755"
+    encoding: b64
+    content: ${k8s_setup_script_b64}
+
+runcmd:
+  - [systemctl, enable, --now, qemu-guest-agent]
+  - [/usr/local/sbin/k8s-node-setup.sh]

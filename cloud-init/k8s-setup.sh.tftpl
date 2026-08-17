@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+#
+# Kubernetes ノードの準備スクリプト。
+#
+# このファイルは Terraform の templatefile() で描画され、base64 に変換されて
+# cloud-init の write_files でノードに配置される。旧経路のように
+# raw.githubusercontent.com から curl してくるのではないので、内容の変更は
+# terraform plan の差分に現れる。
+#
+# テンプレートの注意:
+#   ドル記号 + 波括弧 の並びは Terraform の補間として解釈される。
+#   シェル変数は波括弧を付けない $VAR の形で書くこと。
+#   このスクリプトはその方針で統一している。
+#
+# このスクリプトがやるのは kubeadm を「使える状態にする」ところまで。
+# kubeadm init / join は行わない（README を参照）。
+
+set -euo pipefail
+
+K8S_MINOR="${k8s_minor_version}"
+
+log() {
+  echo "[k8s-node-setup] $*"
+}
+
+# クラウドイメージでは起動直後に unattended-upgrades が apt のロックを
+# 掴んでいることがある。掴まれたまま apt-get を叩くと失敗するので待つ。
+wait_for_apt() {
+  local waited=0
+  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 ||
+    fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    if [ "$waited" -ge 300 ]; then
+      log "apt のロックが 300 秒解放されなかった。このまま続行する"
+      return 0
+    fi
+    log "apt のロック解放を待機中 ($waited 秒)"
+    sleep 5
+    waited=$((waited + 5))
+  done
+}
+
+log "開始 (kubernetes v$K8S_MINOR)"
+
+# --------------------------------------------------------------------------
+# swap の無効化
+#
+# クラウドイメージには通常 swap はないが、有効だと kubelet が起動しないので
+# 明示的に落とし、再起動後も戻らないよう fstab も直す。
+# --------------------------------------------------------------------------
+log "swap を無効化する"
+swapoff -a
+sed -i.bak -E '/\sswap\s/ s/^/#/' /etc/fstab
+
+# --------------------------------------------------------------------------
+# カーネルモジュール
+# --------------------------------------------------------------------------
+log "カーネルモジュールをロードする"
+cat <<'EOF' >/etc/modules-load.d/kubernetes.conf
+overlay
+br_netfilter
+EOF
+
+modprobe overlay
+modprobe br_netfilter
+
+# --------------------------------------------------------------------------
+# sysctl
+#
+# 旧 k8s-setup/setup.sh は /etc/sysctl.d/k8s.conf を 2 回書いており、
+# 後の定義が前を黙って上書きしていた。ここでは 1 ファイルに集約する。
+# --------------------------------------------------------------------------
+log "sysctl を設定する"
+cat <<'EOF' >/etc/sysctl.d/99-kubernetes.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+
+sysctl --system
+
+# 旧スクリプトにあった update-alternatives による iptables-legacy への
+# 切り替えは意図的に外している。古い k8s 向けの対処で、現在の
+# containerd + kube-proxy では通常不要。問題が出たらここに戻すこと。
+
+# --------------------------------------------------------------------------
+# containerd
+# --------------------------------------------------------------------------
+log "containerd を導入する"
+wait_for_apt
+apt-get update
+apt-get install -y containerd
+
+mkdir -p /etc/containerd
+containerd config default >/etc/containerd/config.toml
+
+# cgroup ドライバを systemd に揃える。kubelet 側と食い違うとノードが
+# Ready にならない典型的な事故になる。
+#
+# 注意: config.toml は version 2 と 3 で構造が変わる。k8s のバージョンを
+# 上げてノードが Ready にならない場合、まずここを疑うこと。
+sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+
+if ! grep -q 'SystemdCgroup = true' /etc/containerd/config.toml; then
+  log "警告: containerd の設定に SystemdCgroup = true を確認できなかった"
+  log "警告: config.toml の形式が変わった可能性がある。手で確認すること"
+fi
+
+systemctl restart containerd
+systemctl enable containerd
+
+# --------------------------------------------------------------------------
+# kubeadm / kubelet / kubectl
+#
+# リポジトリ URL にマイナーバージョンが含まれる。バージョン追従で必ず
+# 触る箇所なので、Terraform の変数 k8s_minor_version から渡している。
+# --------------------------------------------------------------------------
+log "kubernetes のパッケージを導入する"
+install -m 0755 -d /etc/apt/keyrings
+
+curl -fsSL "https://pkgs.k8s.io/core:/stable:/v$K8S_MINOR/deb/Release.key" |
+  gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v$K8S_MINOR/deb/ /" \
+  >/etc/apt/sources.list.d/kubernetes.list
+
+wait_for_apt
+apt-get update
+apt-get install -y kubelet kubeadm kubectl
+
+# 意図しない自動更新でクラスタが壊れるのを防ぐ。
+# バージョンを上げるときは apt-mark unhold してから作業すること。
+apt-mark hold kubelet kubeadm kubectl
+
+systemctl enable kubelet
+
+# 準備完了の目印。cloud-init の完了確認と合わせて使う。
+touch /var/lib/k8s-node-prepared
+
+log "完了。kubeadm init / join は別途実行すること"
